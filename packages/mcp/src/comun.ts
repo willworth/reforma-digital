@@ -96,3 +96,14 @@ export const words = (q: string | undefined) =>
     .filter(Boolean);
 /** Si el texto contiene todas las palabras, en cualquier orden. */
 export const matches = (text: string, q: string[]) => q.every((w) => fold(text).includes(w));
+
+const entities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+/** Las entidades de un texto XML o HTML, como «&amp;» o «&#233;». */
+export const decode = (text: string) =>
+  text.replace(/&(#x?[\da-f]+|\w+);/gi, (all, code: string) =>
+    code[0] === '#'
+      ? String.fromCodePoint(
+          Number.parseInt(code.slice(code[1] === 'x' ? 2 : 1), code[1] === 'x' ? 16 : 10),
+        )
+      : (entities[code] ?? all),
+  );
