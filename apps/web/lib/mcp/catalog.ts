@@ -5,6 +5,7 @@ import { POST as carburantes } from '../../app/mcp/carburantes/route';
 import { POST as ine } from '../../app/mcp/ine/route';
 import { POST as alsa } from '../../app/mcp/alsa/route';
 import { POST as eustat } from '../../app/mcp/eustat/route';
+import { POST as crem } from '../../app/mcp/crem/route';
 import type { StaticImageData } from 'next/image';
 import type { Category } from './categorias';
 import congresoEscena from './escenas/congreso.png';
@@ -14,6 +15,7 @@ import carburantesEscena from './escenas/carburantes.png';
 import ineEscena from './escenas/ine.png';
 import alsaEscena from './escenas/alsa.png';
 import eustatEscena from './escenas/eustat.png';
+import cremEscena from './escenas/crem.png';
 
 /** Lo que el servidor no sabe de sí mismo; las herramientas se le preguntan a él (`servers()`). */
 type Servidor = {
@@ -101,6 +103,21 @@ const servidores: Servidor[] = [
     ],
   },
   {
+    id: 'crem',
+    name: 'CREM (Región de Murcia)',
+    category: 'estadistica',
+    // El logo del CREM solo se descarga tras el control antibots de su web: un gráfico (Lucide).
+    logo: { src: '/mcp/crem.svg' },
+    escena: cremEscena,
+    summary:
+      'Las estadísticas del Centro Regional de Estadística de Murcia, por municipio: paro registrado, población, nacimientos, migraciones, educación y elecciones.',
+    examples: [
+      '¿Cuánto paro registrado hay en Yecla y cómo ha evolucionado este año?',
+      '¿Cuántos niños nacieron en la Región de Murcia el año pasado?',
+      '¿Cuántos profesores hay en los centros públicos de Cartagena?',
+    ],
+  },
+  {
     id: 'carburantes',
     name: 'Precios de carburantes',
     category: 'consumo',
@@ -157,6 +174,7 @@ const handlers: Record<string, Entry['handler']> = {
   boe,
   ine,
   eustat,
+  crem,
   carburantes,
   alsa,
 };

@@ -1,7 +1,7 @@
 // Servidor MCP del BOE: el sumario de cada día y la legislación consolidada, de la API de datos
 // abiertos del BOE (https://www.boe.es/datosabiertos/), sin clave.
 import { z } from 'zod';
-import { get, READ_ONLY_EXTERNAL, run, server, SourceError, type Fetch } from './comun';
+import { decode, get, READ_ONLY_EXTERNAL, run, server, SourceError, type Fetch } from './comun';
 
 const API = 'https://www.boe.es/datosabiertos/api';
 const SOURCE =
@@ -166,16 +166,6 @@ export async function indiceNorma(fetchImpl: Fetch, id: string) {
     bloques: (bloques ?? []).map(({ id, titulo }) => ({ id, titulo })),
   };
 }
-
-const entities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-const decode = (text: string) =>
-  text.replace(/&(#x?[\da-f]+|\w+);/gi, (all, code: string) =>
-    code[0] === '#'
-      ? String.fromCodePoint(
-          Number.parseInt(code.slice(code[1] === 'x' ? 2 : 1), code[1] === 'x' ? 16 : 10),
-        )
-      : (entities[code] ?? all),
-  );
 
 /** El texto vigente de un bloque: la última de sus versiones, un párrafo por línea. */
 export function textoBloque(xml: string) {
