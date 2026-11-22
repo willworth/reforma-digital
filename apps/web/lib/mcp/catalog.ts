@@ -11,6 +11,7 @@ import { POST as contratacion } from '../../app/mcp/contratacion/route';
 import { POST as subvenciones } from '../../app/mcp/subvenciones/route';
 import { POST as municipios } from '../../app/mcp/municipios/route';
 import { POST as trafico } from '../../app/mcp/trafico/route';
+import { POST as crem } from '../../app/mcp/crem/route';
 import type { StaticImageData } from 'next/image';
 import type { Category } from './categorias';
 import congresoEscena from './escenas/congreso.png';
@@ -26,6 +27,7 @@ import contratacionEscena from './escenas/contratacion.png';
 import subvencionesEscena from './escenas/subvenciones.png';
 import municipiosEscena from './escenas/municipios.png';
 import traficoEscena from './escenas/trafico.png';
+import cremEscena from './escenas/crem.png';
 
 /** Lo que el servidor no sabe de sí mismo; las herramientas se le preguntan a él (`servers()`). */
 type Servidor = {
@@ -139,6 +141,21 @@ const servidores: Servidor[] = [
       '¿Cuánto debe mi ayuntamiento por vecino y cuánto tarda en pagar a sus proveedores?',
       '¿Cuánto cobra el alcalde de Badalona y cuál es el tope legal?',
       '¿Qué ayuntamientos de Huelva de más de 20.000 habitantes gestionan peor su dinero?',
+    ],
+  },
+  {
+    id: 'crem',
+    name: 'CREM (Región de Murcia)',
+    category: 'estadistica',
+    // El logo del CREM solo se descarga tras el control antibots de su web: un gráfico (Lucide).
+    logo: { src: '/mcp/crem.svg' },
+    escena: cremEscena,
+    summary:
+      'Las estadísticas del Centro Regional de Estadística de Murcia, por municipio: paro registrado, población, nacimientos, migraciones, educación y elecciones.',
+    examples: [
+      '¿Cuánto paro registrado hay en Yecla y cómo ha evolucionado este año?',
+      '¿Cuántos niños nacieron en la Región de Murcia el año pasado?',
+      '¿Cuántos profesores hay en los centros públicos de Cartagena?',
     ],
   },
   {
@@ -258,6 +275,7 @@ const handlers: Record<string, Entry['handler']> = {
   eustat,
   catastro,
   municipios,
+  crem,
   carburantes,
   'red-electrica': redElectrica,
   alsa,

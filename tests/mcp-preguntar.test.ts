@@ -52,6 +52,7 @@ describe('preguntar a la biblioteca MCP', () => {
       'eustat',
       'catastro',
       'municipios',
+      'crem',
       'carburantes',
       'red-electrica',
       'alsa',
