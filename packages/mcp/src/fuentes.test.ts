@@ -541,7 +541,8 @@ describe('CREM', () => {
     </dimension>
   </datos>
 </publicacion>`;
-  const fetchXml = () => vi.fn<typeof fetch>(async () => new Response(Buffer.from(paro, 'latin1')));
+  const fetchXml = (xml = paro) =>
+    vi.fn<typeof fetch>(async () => new Response(Buffer.from(xml, 'latin1')));
 
   it('lists the SICREM tables the portal links, newest first, and flags ids with two names', async () => {
     const xml = (ruta: string) => `http://econet.carm.es/web/crem/inicio/-/crem/sicrem/${ruta}`;
@@ -640,21 +641,41 @@ describe('CREM', () => {
         `<dimension val="${i}"><nombre>Año ${i}</nombre><nivel>0</nivel><valor>${i}</valor></dimension>`,
     ).join('');
     const xml = `<publicacion><titulo>Serie larga</titulo><fuente>Fecha de actualización: 01/01/2026.</fuente><fuente>- CREM</fuente><datos>${filas}</datos></publicacion>`;
-    const result = await datosTablaCrem(
-      vi.fn<typeof fetch>(async () => new Response(xml)),
-      'PU_x/xml/xml1.xml',
-    );
+    const result = await datosTablaCrem(fetchXml(xml), 'PU_x/xml/xml1.xml');
     expect(result).toMatchObject({ total: 201, nota: expect.stringContaining('afina con `q`') });
     expect(result.datos).toHaveLength(200);
   });
 
-  it('refuses tables it cannot read rather than misnaming their data', async () => {
+  it('gives null, not zero, for a value CREM leaves empty', async () => {
     const vacia = paro.replace('<valor>2191</valor>', '<valor/>');
+    expect(
+      (await datosTablaCrem(fetchXml(vacia), 'PU_paroRegistrado/xml/xml4.xml', 'yecla')).datos,
+    ).toEqual([
+      { serie: 'Yecla · Octubre 2026', valor: null },
+      { serie: 'Yecla · Septiembre 2026', valor: -0.5 },
+    ]);
+  });
+
+  it('does not take the update date or a note for the origin', async () => {
+    const soloFecha = paro.replace(/<fuente>- [^<]*<\/fuente>/, '');
+    expect(await verTablaCrem(fetchXml(soloFecha), 'PU_paroRegistrado/xml/xml4.xml')).toMatchObject(
+      { actualizada: '2026-11-04', origen: undefined, notas: [] },
+    );
+    const sinFecha = paro.replace(/<fuente>Fecha[^<]*<\/fuente>/, '<fuente>Una nota.</fuente>');
+    expect(await verTablaCrem(fetchXml(sinFecha), 'PU_paroRegistrado/xml/xml4.xml')).toMatchObject({
+      actualizada: undefined,
+      origen: 'Servicio Regional de Empleo y Formación. Paro Registrado',
+      notas: ['Una nota.'],
+    });
+  });
+
+  it.each([
+    ['an empty level', (xml: string) => xml.replace('<dimension val="1">', '<dimension val="1"/>')],
+    ['an empty name', (xml: string) => xml.replace('<nombre>Yecla</nombre>', '<nombre/>')],
+    ['no data', (xml: string) => xml.replace(/<datos>[\s\S]*<\/datos>/, '')],
+  ])('refuses a table with %s rather than misnaming or hiding its data', async (_, cambia) => {
     await expect(
-      datosTablaCrem(
-        vi.fn<typeof fetch>(async () => new Response(vacia)),
-        'PU_paroRegistrado/xml/xml4.xml',
-      ),
+      datosTablaCrem(fetchXml(cambia(paro)), 'PU_paroRegistrado/xml/xml4.xml'),
     ).rejects.toThrow('formato que el servidor no sabe leer');
   });
 

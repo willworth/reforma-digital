@@ -25,15 +25,18 @@ const MAX_DATOS = 200;
 
 const INSTRUCTIONS = `Estadísticas del Centro Regional de Estadística de Murcia (CREM): paro registrado, población, nacimientos, migraciones, educación y elecciones de la Región de Murcia y de cada uno de sus 45 municipios.
 Se llega a un dato en tres pasos: buscar_tabla (por palabras del tema; los títulos dicen «según municipios», no «Yecla»), ver_tabla (qué contiene y cuándo se actualizó) y datos_tabla (los datos, filtrados por palabras como «Yecla octubre 2026»).
-Algunas tablas llevan años sin actualizarse: di siempre la fecha de \`actualizada\` (o que el CREM no la da) y, si es antigua, avisa de que el INE puede tener un dato más reciente.
+Algunas tablas llevan años sin actualizarse: di siempre la fecha de \`actualizada\` (o que el CREM no la da) y, si es antigua, avisa de que el INE puede tener un dato más reciente. Un valor null es un dato que el CREM no da (por ejemplo, de un año en que el municipio aún no existía): no es un cero.
 Solo están las tablas que enlaza el portal de datos abiertos de la Región, no todo el banco de datos del CREM. Si el nombre del portal y el título de la tabla no coinciden, vale el título.
 ${SOURCE}`;
 
 type Tabla = { id: string; nombre: string; modificada: string; aviso?: string };
 let catalogo: Promise<Tabla[]> | undefined;
 
-// El portal da los enlaces con http:// o https://; el id es la ruta dentro de SICREM.
-const ID = /^https?:\/\/econet\.carm\.es\/web\/crem\/inicio\/-\/crem\/sicrem\/(.+\.xml)$/;
+// El id es la ruta de la tabla dentro de SICREM; el portal la enlaza con http:// o https://.
+const RUTA = String.raw`PU\w*\/(?:\w+\/)*xml\w*\.xml`;
+const ID = new RegExp(
+  String.raw`^https?:\/\/econet\.carm\.es\/web\/crem\/inicio\/-\/crem\/sicrem\/(${RUTA})$`,
+);
 
 async function pedirCatalogo(fetchImpl: Fetch) {
   const query = new URLSearchParams({
@@ -93,42 +96,51 @@ const numero = (valor: string) =>
     ? Number(valor.replaceAll('.', '').replace(',', '.'))
     : valor;
 
+const ilegible = () =>
+  new SourceError('El CREM ha dado esta tabla con un formato que el servidor no sabe leer.');
+
 /** Una tabla del SICREM: sus datos, uno por cada combinación de dimensiones, y su ficha. */
 function leerTabla(xml: string) {
-  // Una etiqueta vacía (`<dimension/>`, `<valor/>`) descuadraría todos los datos que la siguen.
-  if (/<(dimension|valor)\b[^>]*\/>/.test(xml))
-    throw new SourceError(
-      'El CREM ha dado esta tabla con un formato que el servidor no sabe leer.',
-    );
   const info = /<info val="([^"]*)"/.exec(xml)?.[1];
   const titulo = /<titulo>([\s\S]*?)<\/titulo>/.exec(xml)?.[1];
   if (titulo === undefined) throw new SourceError('El CREM no ha dado una tabla con ese id.');
-  // La primera línea es la fecha de actualización, la última el organismo y, entre medias, notas.
+  const cuerpo = /<datos>([\s\S]*)<\/datos>/.exec(xml)?.[1];
+  // Una dimensión o un nombre vacíos descuadrarían los nombres de los datos que los siguen.
+  if (cuerpo === undefined || /<(dimension|nombre)\b[^>]*\/>/.test(cuerpo)) throw ilegible();
+  // Por orden: la fecha de actualización, notas y «- Organismo». Puede faltar la fecha o el organismo.
   const fuente = [...xml.matchAll(/<fuente>([\s\S]*?)<\/fuente>/g)].map((m) => texto(m[1] ?? ''));
-  const fecha = /(\d{2})\/(\d{2})\/(\d{4})/.exec(fuente[0] ?? '');
+  const fecha = /^Fecha de actualización: (\d{2})\/(\d{2})\/(\d{4})/.exec(fuente[0] ?? '');
+  if (fecha) fuente.shift();
+  const origen = /^-\s*(.+)/.exec(fuente.at(-1) ?? '')?.[1];
+  if (origen !== undefined) fuente.pop();
   const niveles: Set<string>[] = [];
-  const datos: { serie: string; valor: number | string }[] = [];
+  const datos: { serie: string; valor: number | string | null }[] = [];
   const ruta: string[] = [];
-  // Cada <dimension> anida a las siguientes; las hojas llevan <valor>.
-  for (const m of xml.matchAll(
-    /<dimension\b[^>]*>|<\/dimension>|<nombre>([\s\S]*?)<\/nombre>|<valor>([\s\S]*?)<\/valor>/g,
+  // Cada <dimension> anida a las siguientes; las hojas llevan <valor>, o <valor/> si no hay dato.
+  for (const m of cuerpo.matchAll(
+    /<dimension\b[^>]*>|<\/dimension>|<nombre>([\s\S]*?)<\/nombre>|<valor>([\s\S]*?)<\/valor>|<valor\s*\/>/g,
   )) {
     if (m[0] === '</dimension>') ruta.pop();
     else if (m[0].startsWith('<dimension')) ruta.push('');
+    else if (ruta.length === 0) throw ilegible();
     else if (m[1] !== undefined) {
       const nombre = texto(m[1]);
       ruta[ruta.length - 1] = nombre;
       (niveles[ruta.length - 1] ??= new Set()).add(nombre);
-    } else datos.push({ serie: ruta.join(' · '), valor: numero(texto(m[2] ?? '')) });
+    } else {
+      const valor = texto(m[2] ?? '');
+      datos.push({ serie: ruta.join(' · '), valor: valor === '' ? null : numero(valor) });
+    }
   }
+  if (datos.length === 0) throw ilegible();
   return {
     ficha: {
       titulo: texto(titulo).replace(/^\d+\.\s*/, ''),
       // En las tablas de un corte (un mes, un sexo…), cuál es.
       corte: info === undefined ? undefined : texto(info),
-      actualizada: fecha && `${fecha[3]}-${fecha[2]}-${fecha[1]}`,
-      origen: fuente.at(-1)?.replace(/^-\s*/, ''),
-      notas: fuente.slice(1, -1),
+      actualizada: fecha ? `${fecha[3]}-${fecha[2]}-${fecha[1]}` : undefined,
+      origen,
+      notas: fuente,
     },
     niveles: niveles.map((n) => [...n]),
     datos,
@@ -137,7 +149,7 @@ function leerTabla(xml: string) {
 
 const tabla = z
   .string()
-  .regex(/^PU\w*\/(\w+\/)*xml\w*\.xml$/)
+  .regex(new RegExp(`^${RUTA}$`))
   .max(120)
   .describe('Id de la tabla, de buscar_tabla, como PU_paroRegistrado/xml/xml4.xml.');
 
