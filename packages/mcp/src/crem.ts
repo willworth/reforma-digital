@@ -29,7 +29,7 @@ Algunas tablas llevan años sin actualizarse: di siempre la fecha de \`actualiza
 Solo están las tablas que enlaza el portal de datos abiertos de la Región, no todo el banco de datos del CREM. Si el nombre del portal y el título de la tabla no coinciden, vale el título.
 ${SOURCE}`;
 
-type Tabla = { id: string; nombre: string; modificada: string; aviso?: string };
+type Tabla = { id: string; nombres: string[]; modificada: string };
 let catalogo: Promise<Tabla[]> | undefined;
 
 // El id es la ruta de la tabla dentro de SICREM; el portal la enlaza con http:// o https://.
@@ -45,11 +45,14 @@ async function pedirCatalogo(fetchImpl: Fetch) {
     rows: '1000',
   });
   const body = (await (await get(fetchImpl, `${CKAN}?${query}`)).json()) as {
-    result: {
-      count: number;
-      results: { title: string; metadata_modified: string; res_url: string[] }[];
+    result?: {
+      count?: number;
+      results?: { title: string; metadata_modified: string; res_url: string[] }[];
     };
   };
+  // Un 200 sin la forma de CKAN no es un catálogo vacío.
+  if (typeof body.result?.count !== 'number' || !Array.isArray(body.result.results))
+    throw new SourceError('El catálogo del CREM no ha respondido como se esperaba.');
   if (body.result.count > body.result.results.length)
     throw new SourceError('El catálogo del CREM tiene más tablas de las que se pueden pedir.');
   // El portal enlaza a veces un mismo XML con nombres distintos («Hombres» y «Ambos sexos»): no
@@ -67,12 +70,8 @@ async function pedirCatalogo(fetchImpl: Fetch) {
     }
   return [...porId].map(([id, { nombres, modificada }]): Tabla => ({
     id,
-    nombre: [...nombres].join(' | '),
+    nombres: [...nombres],
     modificada,
-    aviso:
-      nombres.size > 1
-        ? 'El portal enlaza esta tabla con varios nombres: mira su título con ver_tabla antes de usarla.'
-        : undefined,
   }));
 }
 
@@ -83,16 +82,27 @@ export async function buscarTabla(fetchImpl: Fetch, q: string) {
   });
   const w = words(q);
   const found = (await catalogo)
-    .filter((t) => matches(t.nombre, w))
+    .filter((t) => t.nombres.some((n) => matches(n, w)))
     .sort((a, b) => b.modificada.localeCompare(a.modificada));
-  return { total: found.length, tablas: found.slice(0, 30) };
+  return {
+    total: found.length,
+    tablas: found.slice(0, 30).map(({ id, nombres, modificada }) => ({
+      id,
+      nombre: nombres.join(' | '),
+      modificada,
+      aviso:
+        nombres.length > 1
+          ? 'El portal enlaza esta tabla con varios nombres: mira su título con ver_tabla antes de usarla.'
+          : undefined,
+    })),
+  };
 }
 
 const texto = (s: string) => decode(s).replace(/\s+/g, ' ').trim();
 
 // Formato español: «1.531.878» y «100,0». Lo que no es un número se da tal cual.
 const numero = (valor: string) =>
-  /^-?\d{1,3}(\.\d{3})*(,\d+)?$|^-?\d+(,\d+)?$/.test(valor)
+  /^-?(?:\d+|\d{1,3}(?:\.\d{3})+)(?:,\d+)?$/.test(valor)
     ? Number(valor.replaceAll('.', '').replace(',', '.'))
     : valor;
 
@@ -116,19 +126,30 @@ function leerTabla(xml: string) {
   const niveles: Set<string>[] = [];
   const datos: { serie: string; valor: number | string | null }[] = [];
   const ruta: string[] = [];
+  // Si cada dimensión abierta tiene ya un <valor> o dimensiones dentro. Una hoja sin <valor> (el
+  // CREM las da, como «Otros» en el último mes) es un dato que no da, como <valor/>: null.
+  const llena: boolean[] = [];
   // Cada <dimension> anida a las siguientes; las hojas llevan <valor>, o <valor/> si no hay dato.
   for (const m of cuerpo.matchAll(
     /<dimension\b[^>]*>|<\/dimension>|<nombre>([\s\S]*?)<\/nombre>|<valor>([\s\S]*?)<\/valor>|<valor\s*\/>/g,
   )) {
-    if (m[0] === '</dimension>') ruta.pop();
-    else if (m[0].startsWith('<dimension')) ruta.push('');
-    else if (ruta.length === 0) throw ilegible();
+    if (m[0] === '</dimension>') {
+      if (!ruta.at(-1)) throw ilegible();
+      if (!llena.pop()) datos.push({ serie: ruta.join(' · '), valor: null });
+      ruta.pop();
+    } else if (m[0].startsWith('<dimension')) {
+      llena.fill(true, -1);
+      ruta.push('');
+      llena.push(false);
+    } else if (ruta.length === 0) throw ilegible();
     else if (m[1] !== undefined) {
       const nombre = texto(m[1]);
+      if (nombre === '') throw ilegible();
       ruta[ruta.length - 1] = nombre;
       (niveles[ruta.length - 1] ??= new Set()).add(nombre);
     } else {
       const valor = texto(m[2] ?? '');
+      llena.fill(true, -1);
       datos.push({ serie: ruta.join(' · '), valor: valor === '' ? null : numero(valor) });
     }
   }
@@ -142,7 +163,7 @@ function leerTabla(xml: string) {
       origen,
       notas: fuente,
     },
-    niveles: niveles.map((n) => [...n]),
+    niveles,
     datos,
   };
 }
@@ -160,7 +181,10 @@ async function pedirTabla(fetchImpl: Fetch, id: string) {
     response = await get(fetchImpl, `${SICREM}${id}`, 'text/xml');
   } catch (error) {
     if (error instanceof SourceError && error.status === 404)
-      throw new SourceError(`El CREM no tiene la tabla ${id}. Búscala con buscar_tabla.`);
+      // El portal enlaza algunas tablas que el CREM ya no publica.
+      throw new SourceError(
+        `El CREM no tiene la tabla ${id}, aunque el portal la enlace. Busca otra con buscar_tabla.`,
+      );
     throw error;
   }
   // Los XML del SICREM vienen en ISO-8859-1: `response.text()` rompería las tildes.
@@ -173,7 +197,7 @@ export async function verTabla(fetchImpl: Fetch, id: string) {
     ...ficha,
     total: datos.length,
     // De cada nivel, una muestra: datos_tabla filtra por texto.
-    niveles: niveles.map((n) => ({ total: n.length, valores: n.slice(0, 60) })),
+    niveles: niveles.map((n) => ({ total: n.size, valores: [...n].slice(0, 60) })),
   };
 }
 

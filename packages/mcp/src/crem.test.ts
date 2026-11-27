@@ -34,6 +34,13 @@ describe('CREM', () => {
   const fetchXml = (xml = paro) =>
     vi.fn<typeof fetch>(async () => new Response(Buffer.from(xml, 'latin1')));
 
+  // Antes que la lista: el catálogo se guarda en memoria, y un fallo lo deja sin guardar.
+  it('does not take a 200 without the CKAN shape for an empty catalog', async () => {
+    await expect(buscarTablaCrem(fetchJson({ result: { results: [] } }), 'paro')).rejects.toThrow(
+      'no ha respondido como se esperaba',
+    );
+  });
+
   it('lists the SICREM tables the portal links, newest first, and flags ids with two names', async () => {
     const xml = (ruta: string) => `http://econet.carm.es/web/crem/inicio/-/crem/sicrem/${ruta}`;
     const fetchImpl = fetchJson({
@@ -90,6 +97,8 @@ describe('CREM', () => {
         },
       ],
     });
+    // Cada nombre cuenta solo: ninguno de los dos dice «hombres» y «ambos».
+    expect(await buscarTablaCrem(fetchImpl, 'hombres ambos')).toEqual({ total: 0, tablas: [] });
   });
 
   it('reads the table in ISO-8859-1, with its update date, origin and levels', async () => {
@@ -137,13 +146,16 @@ describe('CREM', () => {
   });
 
   it('gives null, not zero, for a value CREM leaves empty', async () => {
-    const vacia = paro.replace('<valor>2191</valor>', '<valor/>');
-    expect(
-      (await datosTablaCrem(fetchXml(vacia), 'PU_paroRegistrado/xml/xml4.xml', 'yecla')).datos,
-    ).toEqual([
-      { serie: 'Yecla · Octubre 2026', valor: null },
-      { serie: 'Yecla · Septiembre 2026', valor: -0.5 },
-    ]);
+    // «Otros», en el último mes del XML real, no trae <valor>: tampoco es un cero ni se pierde.
+    for (const vacio of ['<valor/>', '']) {
+      const vacia = paro.replace('<valor>2191</valor>', vacio);
+      expect(
+        (await datosTablaCrem(fetchXml(vacia), 'PU_paroRegistrado/xml/xml4.xml', 'yecla')).datos,
+      ).toEqual([
+        { serie: 'Yecla · Octubre 2026', valor: null },
+        { serie: 'Yecla · Septiembre 2026', valor: -0.5 },
+      ]);
+    }
   });
 
   it('does not take the update date or a note for the origin', async () => {
@@ -163,6 +175,7 @@ describe('CREM', () => {
     ['an empty level', (xml: string) => xml.replace('<dimension val="1">', '<dimension val="1"/>')],
     ['an empty name', (xml: string) => xml.replace('<nombre>Yecla</nombre>', '<nombre/>')],
     ['no data', (xml: string) => xml.replace(/<datos>[\s\S]*<\/datos>/, '')],
+    ['a blank name', (xml: string) => xml.replace('<nombre>Yecla</nombre>', '<nombre> </nombre>')],
   ])('refuses a table with %s rather than misnaming or hiding its data', async (_, cambia) => {
     await expect(
       datosTablaCrem(fetchXml(cambia(paro)), 'PU_paroRegistrado/xml/xml4.xml'),
